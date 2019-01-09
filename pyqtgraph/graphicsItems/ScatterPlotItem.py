@@ -144,7 +144,7 @@ class SymbolAtlas(object):
                     sourceRecti = newRectSrc
         return sourceRect
 
-    def buildAtlas(self):
+    def buildAtlas(self, devicePixelRatio=1):
         # get rendered array for all symbols, keep track of avg/max width
         rendered = {}
         avgWidth = 0.0
@@ -152,7 +152,10 @@ class SymbolAtlas(object):
         images = []
         for key, sourceRect in self.symbolMap.items():
             if sourceRect.width() == 0:
-                img = renderSymbol(sourceRect.symbol, key[1], sourceRect.pen, sourceRect.brush)
+                img = renderSymbol(
+                    sourceRect.symbol, key[1] * devicePixelRatio,
+                    sourceRect.pen, sourceRect.brush
+                )
                 images.append(img)  ## we only need this to prevent the images being garbage collected immediately
                 arr = fn.imageToArray(img, copy=False, transpose=False)
             else:
@@ -200,14 +203,15 @@ class SymbolAtlas(object):
         self.atlasValid = True
         self.max_width = maxWidth
 
-    def getAtlas(self):
+    def getAtlas(self, devicePixelRatio=1):
         if not self.atlasValid:
-            self.buildAtlas()
+            self.buildAtlas(devicePixelRatio=devicePixelRatio)
         if self.atlas is None:
             if len(self.atlasData) == 0:
                 return QtGui.QPixmap(0,0)
             img = fn.makeQImage(self.atlasData, copy=False, transpose=False)
             self.atlas = QtGui.QPixmap(img)
+            self.atlas.setDevicePixelRatio(devicePixelRatio)
         return self.atlas
 
 
@@ -759,7 +763,8 @@ class ScatterPlotItem(GraphicsObject):
 
             if self.opts['useCache'] and self._exportOpts is False:
                 # Draw symbols from pre-rendered atlas
-                atlas = self.fragmentAtlas.getAtlas()
+                dpr = p.device().devicePixelRatioF()
+                atlas = self.fragmentAtlas.getAtlas(dpr)
 
                 # Update targetRects if necessary
                 updateMask = viewMask & np.equal(self.data['targetRect'], None)
@@ -769,10 +774,38 @@ class ScatterPlotItem(GraphicsObject):
                     self.data['targetRect'][updateMask] = list(imap(QtCore.QRectF, updatePts[0,:], updatePts[1,:], width, width))
 
                 data = self.data[viewMask]
-                if QT_LIB == 'PyQt4':
-                    p.drawPixmapFragments(data['targetRect'].tolist(), data['sourceRect'].tolist(), atlas)
-                else:
-                    list(imap(p.drawPixmap, data['targetRect'], repeat(atlas), data['sourceRect']))
+                print(dpr, QT_LIB)
+
+                targetRects, sourceRects = data['targetRect'].tolist(), data['sourceRect'].tolist()
+                pixmap = args[0]
+                args = args[1:]
+                fragments = [
+                    p.PixmapFragment.create(
+                        tr.center(), sr,
+                        tr.width() / sr.width(),
+                        tr.height() / sr.height(),
+                    )
+                    for (tr, sr) in zip(targetRects, sourceRects)
+                ]
+                p.drawPixmapFragments(fragments, atlas)
+
+                # if QT_LIB in ('PyQt4', 'PyQy5'):
+                #     p.drawPixmapFragments(data['targetRect'].tolist(), data['sourceRect'].tolist(), atlas)
+                # elif QT_LIB == 'PyQt5':
+                #     targetRects, sourceRects = a1, a2
+                #     pixmap = args[0]
+                #     args = args[1:]
+                #     fragments = [
+                #         QPainter.PixmapFragment.create(
+                #             tr.center(), sr,
+                #             tr.width() / sr.width(),
+                #             tr.height() / sr.height(),
+                #         )
+                #         for (tr, sr) in zip(targetRects, sourceRects)
+                #     ]
+                #
+                # else:
+                #     list(imap(p.drawPixmap, data['targetRect'], repeat(atlas), data['sourceRect']))
             else:
                 # render each symbol individually
                 p.setRenderHint(p.Antialiasing, aa)
